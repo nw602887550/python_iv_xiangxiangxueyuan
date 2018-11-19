@@ -1,0 +1,883 @@
+
+#########################IV.py###############################
+# coding: utf-8
+
+# 版本说明:
+# 
+# 适用说明：不适用用数据量过大的样本
+# 
+# 输入变量说明：
+# 1、rawData：如数数据集
+# 2、objVar：目标变量
+# 3、varList：输入变量list
+# 4、binCnt：原则分段数
+# 
+# 输出三张表：
+# 1、varStat:
+# 2、varStatSort
+# 3、varStatVal
+# 
+# 输出变量说明：
+# 1、varName：变量名
+# 2、lowerBound：下限
+# 3、upperBound：上限
+# 4、badCnt：坏客户数
+# 5、goodCnt：好客户数
+# 6、eventRate：事件占比
+# 7、woe：woe值
+# 8、iv：iv
+# 9、badRate：坏客户占比
+# 10、badRateTotal：总体坏客户占比
+# 11、varLift：提升度
+# 12、varLiftCum：累积提升度
+# 13、eventRateCum：事件累积占比
+# 14、ks：ks值
+
+# In[1]:
+
+
+import sys
+import numpy as np
+import pandas as pd
+from EDA0428 import *
+##中文路径要求双斜杠
+
+
+# objVar:目标变量，0-1
+# inputVar:输入变量
+# badTotal:bad总数
+# goodTotal:good总数
+# binCnt：分组数
+# 
+# contVarStat:连续变量统计 
+#     nanStat:缺失值统计
+# discVarStat:离散变量统计 
+#     
+#     
+# 下面定义连续变量的分组统计
+
+# In[2]:
+
+
+def contVarStat(rawData,objVar,inputVar,binCnt):    
+    
+    _init_times =0
+    _init_temp=None    
+    rowCnt=rawData.shape[0]
+    totalCnt=0
+    contEventCnt=0
+    binLength=int(rowCnt/binCnt)
+    rawDataSort=rawData.sort_values(by=inputVar,ascending=True)
+    contVarStat=[]
+    
+    for index,items in rawDataSort.iterrows():
+        if _init_times == 0:
+            contEventCnt = items[0]
+            _init_times += 1
+            stepNum=1 
+            lowerBound=items[1]
+                        
+        elif items[1]==_init_temp:
+            contEventCnt += items[0]
+            _init_times += 1
+            stepNum=2
+            
+        elif items[1] !=  _init_temp and _init_times<=binLength:
+            contEventCnt += items[0]
+            _init_times += 1
+            stepNum=3
+            
+        elif items[1] != _init_temp  and _init_times>binLength:
+
+            contVarStat.append([inputVar,lowerBound,_init_temp,contEventCnt,_init_times-contEventCnt])            
+            lowerBound=_init_temp
+            contEventCnt = items[0]
+            _init_times=1
+            stepNum=4      
+        else :
+            print('ERORR')   
+            
+        totalCnt +=1 
+        if totalCnt == rowCnt:
+            contVarStat.append([inputVar,lowerBound,_init_temp,contEventCnt,_init_times-contEventCnt])
+        
+        _init_temp=items[1]
+        
+    return contVarStat
+
+
+# 下面定义缺失值的统计数据
+
+# In[3]:
+
+
+def nanStat(rawData,objVar,inputVar):
+    nanStat=[]
+    badCnt,goodCnt=rawData[rawData[objVar]==1][objVar].count(),rawData[rawData[objVar]==0][objVar].count()
+    nanStat.append([inputVar,'NULL','NULL',badCnt,goodCnt])
+    return nanStat
+
+
+
+# In[4]:
+
+
+def infoVal(rawData,objVar,inputVar,binCnt):
+    import sys
+    import numpy as np
+    import pandas as pd
+    
+    
+    eventCnt=rawData[objVar].count()    
+    badTotal,goodTotal=rawData[rawData[objVar]==1][objVar].count(),rawData[rawData[objVar]==0][objVar].count()
+    badRateTotal=badTotal/eventCnt
+    
+    woeData=rawData.loc[:,[objVar,inputVar]]    
+    notNanCnt=woeData[inputVar].count()
+    woeDataDropna=woeData.dropna()
+    woeDataNan=woeData[woeData[inputVar].isnull()]
+    
+    varStat=[]
+    if eventCnt != notNanCnt:
+        #有缺失值的连续变量统计
+        varStat +=nanStat(woeDataNan,objVar,inputVar)
+        varStat +=contVarStat(woeDataDropna,objVar,inputVar,binCnt)        
+    else:
+        varStat +=contVarStat(woeData,objVar,inputVar,binCnt)
+    #woe计算    
+    varStat=pd.DataFrame(varStat)
+    varStat.columns=['varName','lowerBound','upperBound','badCnt','goodCnt']
+    varStat['eventRate']=(varStat['badCnt']+varStat['goodCnt'])/eventCnt
+    varStat['badDistr']=varStat['badCnt']/badTotal
+    varStat['goodDistr']=varStat['goodCnt']/goodTotal
+
+    varStatTmp=[]
+    for index,items in varStat.iterrows():
+        if items[6]==0:
+            woe=-1
+        elif items[7]==0:
+            woe=1
+        else:
+            woe=np.log(items[6]/items[7])
+        varStatTmp.append([items[0],items[1],items[2],items[3],items[4],items[5],items[6],items[7],woe])
+    varStat=pd.DataFrame(varStatTmp)
+    
+    varStat.columns=['varName','lowerBound','upperBound','badCnt','goodCnt','eventRate','badDistr','goodDistr','woe']
+    
+    varStat['iv']=(varStat['badDistr']-varStat['goodDistr'])*varStat['woe']
+    varStat['badRate']=varStat['badCnt']/(varStat['badCnt']+varStat['goodCnt'])
+    varStat['badRateTotal']=badRateTotal
+    varStat['varLift']=varStat['badRate']/badRateTotal
+    iv_sum=pd.DataFrame(varStat.groupby(by='varName')['iv'].sum()).reset_index()
+    iv_sum.columns=['varName','iv_sum']
+    varStat=varStat.merge(iv_sum,on='varName',how='left')
+    varStat=varStat.sort_values(by=['iv_sum', 'varName'],ascending=False)  
+    return varStat
+
+
+
+# In[5]:
+
+
+def varStat(rawData,objVar,varList,binCnt):
+    varStatdef=pd.DataFrame()
+    for items in varList:
+        varStatTmp=infoVal(rawData,objVar,items,binCnt)
+        varStatdef=pd.concat([varStatdef,varStatTmp],ignore_index=True)
+    
+    varStatSort=varStatdef.sort_values(by=['varName', 'badRate'],ascending=False)    
+    varStatSort['badDistrSum']=varStatSort.groupby(by='varName')['badDistr'].cumsum()
+    varStatSort['goodDistrSum']=varStatSort.groupby(by='varName')['goodDistr'].cumsum()
+    varStatSort['ks']=varStatSort['badDistrSum']-varStatSort['goodDistrSum']
+    varStatSort['badRateCum']=varStatSort.groupby(by='varName')['badCnt'].cumsum()
+    varStatSort['goodRateCum']=varStatSort.groupby(by='varName')['goodCnt'].cumsum()
+    varStatSort['varLiftCum']=varStatSort['badRateCum']/(varStatSort['badRateCum']+varStatSort['goodRateCum'])/varStatSort['badRateTotal']
+    varStatSort['eventRateCum']=varStatSort.groupby(by='varName')['eventRate'].cumsum()
+    
+    varStatVal=pd.DataFrame(varStatSort.groupby(by='varName')['ks'].max()).reset_index()    
+    varStatValTmp=pd.DataFrame(varStatSort.groupby(by='varName')['iv'].sum()).reset_index()
+    varStatVal=varStatVal.merge(varStatValTmp,on='varName',how='left')
+    
+    #清理表
+    varStatdef=varStatdef.drop(['badDistr','goodDistr'],axis=1)
+    varStatSort=varStatSort.drop(['badDistr','goodDistr','badDistrSum','goodDistrSum','ks','badRateCum','goodRateCum'],axis=1)
+    varStatVal=varStatVal.sort_values(by=['iv'],ascending=False)
+    
+    return varStatdef,varStatSort,varStatVal
+
+def corr(df):
+    dfData = df.corr()
+    plt.subplots(figsize=(9, 9)) # 设置画面大小
+    sns.heatmap(dfData, annot=True, vmax=1, square=True, cmap="Blues")
+    plt.savefig('./BluesStateRelation.png')
+    plt.show()
+
+
+def internetfinance():
+    #load data
+    input_path = r'D:\lz\input\model201806\\'  # inout file path 
+    output_path = r'D:\lz\output\model201806\\'  # inout file path     
+    #rawData=pd.read_csv(input_path+'l_35_58_creadit_appchannel.csv',sep=",",encoding='gb18030')
+    rawData=pd.read_csv(input_path+'l_35_58_creadit_appchannel.csv',sep=",",encoding='latin-1')
+    product_type=35    
+    rawData=rawData[rawData['product_type']==product_type]
+    rawData=rawData[rawData['assign_strategy']!=8]
+    varList=rawData.columns.tolist()
+    objVar='m1_ovd3'
+    binCnt=10
+    removeList=['cid','mid','add_day','ad_mon','assign_strategy',
+                'approve_amount','m1_ovd3','m1_ovd5','m1_ovd7','product_type',
+                'm1_ovd10','m1_ovd15','total_org','query_total_org']    
+    varList=list(set(varList)-set(removeList))
+    varStatdef,varStatSort,varStatVal=varStat(rawData,objVar,varList,binCnt)
+    fname=str(product_type)+objVar    
+    svExcel="ivresult_%s.xls" %fname 
+    fileName=output_path+svExcel
+    writer = pd.ExcelWriter(fileName)
+    varStatdef.to_excel(writer ,sheet_name='varStatdef')
+    varStatSort.to_excel(writer,sheet_name='varStatSort')
+    varStatVal.to_excel(writer,sheet_name='varStatVal')
+    writer.save()
+    print('over')
+
+# 示例如下：
+# rawData=excelData
+# objVar='ovd'
+# binCnt=10
+# varList =['Zr_score','理性消费指数','购买力指数','交易风险指数','手机依赖度','电商活跃度','高危时段消费指数','高危品类消费指数', '工作时间网购偏好', '常驻城市',
+#        '收入水平', '消费社交影响力', '稳定性', '电商收货地址稳定性', '电商联系方式稳定性', '履约指数', '电商账龄等级']
+# a,b,c=varStat(rawData,objVar,varList,binCnt)
+# 
+# 
+
+if __name__ == '__main__':
+    internetfinance()
+
+
+
+
+############################2IVCalcWithCut#############################3
+# -*- coding: utf-8 -*-
+#计算不同变量IV值,分为离散和连续值
+import pandas as pd
+import numpy as np
+
+def IVCalcWithCut(jiaka_all,id_var,target_var,var_list,output_path,output_file):
+
+# ---------------------------------------------------------------------------
+    # read file
+    
+    #jiaka_all['overdue_flag'] = jiaka_all['overdue_days'].apply(lambda v: 1 if v > 30 else 0)
+    # del jiaka_all['overdue_days']
+    
+    # ---------------------------------------------------------------------------
+    # set target var and variable list, define variable type
+    dataset = jiaka_all
+    
+    #get char_list and num_list
+    char_list, num_list = calc_num_char_list(dataset, var_list, output_path)
+
+    
+    # ---------------------------------------------------------------------------
+    # after human verify, read in var type
+    var_type = pd.read_csv(output_path + "var_list_jiaka_1201.csv",
+                           nrows=None,
+                           encoding='latin-1',
+                           )
+    print ("len of var_type is %d" %(len(var_type)))
+    
+    # num_list_temp = var_type[var_type['Type'] == 1]['Varname'].tolist()
+    # char_list = var_type[var_type['Type'] == 2]['Varname'].tolist()
+    num_list_temp = list(num_list['Varname'])
+    new_char_list = list(char_list['Varname'])
+
+    # 去除num_list中object类型的字段
+    new_num_list = []
+    for i in num_list_temp:
+        if dataset[i].dtypes != "object":
+            # print(i)
+            new_num_list.append(i)
+        else:
+            print (i+' is object need removed')
+
+    #calc iv for num and char
+    crosstab_all_num = iv_for_num(dataset, new_num_list, target_var, id_var)
+    crosstab_all_char = iv_for_char(dataset, new_char_list, target_var, id_var)
+
+
+
+    # ---------------------------------------------------------------------------
+    # output result
+    num_data = pd.DataFrame()
+    char_data = pd.DataFrame()
+    if len(crosstab_all_num) != 0:
+        num_data = crosstab_all_num[['var', 'value', 'max','Y', 'cnt','cnt_pct','rate', 'tgt%', 'no-tgt%', 'WOE', 'IV_row', 'IV_sum']]
+        num_data['Type'] = 'num'
+    if len(crosstab_all_char) !=0:
+        char_data = crosstab_all_char[['var', 'value','max', 'Y', 'cnt','cnt_pct', 'rate', 'tgt%', 'no-tgt%', 'WOE', 'IV_row', 'IV_sum']]
+        char_data['Type'] = 'char'
+    merge_data = pd.concat([num_data,char_data], axis = 0)
+    merge_data = merge_data.sort_values(by=['IV_sum','var','rate',],ascending=False)
+    merge_data.to_csv(output_path + output_file,encoding='latin-1', index=None)    
+    print ('IVCalcWithCut is over')
+
+# ---------------------------------------------------------------------------
+#  calculate num_list and char_list
+def calc_num_char_list(dataset, var_list, output_path):
+    char_list = []
+    num_list = []
+    # 将变量分为字符型(小于50个的数值)和数值型
+    for var in var_list:
+        # print(var)
+        try:
+            to_num = pd.to_numeric(dataset[var])
+            # print('numerica')
+            df = pd.DataFrame(dataset[var].value_counts())
+            if len(df) < 10:
+                # print('string')
+                char_list.append(var)
+            else:
+                num_list.append(var)
+        except:
+            # print('string')
+            df = pd.DataFrame(dataset[var].value_counts())
+            if len(df) < 100:
+                char_list.append(var)
+            else:
+                print(var + ' except and value_counts >100')
+
+    num_list = pd.DataFrame({'Varname': num_list})
+    num_list['Type'] = 1
+    char_list = pd.DataFrame({'Varname': char_list})
+    char_list['Type'] = 2
+    list_all = pd.concat([num_list, char_list])
+
+    sample = dataset.head()
+    sample = sample.T
+    sample.reset_index(inplace=True)
+    sample.columns = ['Varname', 'rec1', 'rec2', 'rec3', 'rec4', 'rec5']
+
+    var_list = pd.merge(sample,
+                        list_all,
+                        left_on=['Varname'],
+                        right_on=['Varname'],
+                        how='left',
+                        suffixes=('_left', '_right'))
+
+    print("=========================================================")
+    print("merge vartype with samples")
+    print('Left table obs: %s' % len(sample))
+    print('Right table obs: %s' % len(list_all))
+    print('output obs: %s' % len(var_list))
+    print('Matched obs: %s' % var_list.Type.count())
+    print('Matched rate: %s' % (var_list.Type.count() * 1.0 / len(sample)))
+    print('Table unique key: %s' % var_list['Varname'].nunique())
+
+    var_list.to_csv(output_path + 'var_list_jiaka_1201.csv',
+                    encoding='latin-1',
+                    index=None)
+    return char_list,num_list
+# ---------------------------------------------------------------------------
+#  calculate IV for numerica variables
+def iv_for_num(dataset,num_list,target_var,id_var):
+    crosstab_all_num = pd.DataFrame()
+
+    for variable in num_list:
+        print (variable)
+        if variable is None:
+            continue
+        # treat missing value as one group
+
+        missing_cnt = dataset[variable].isnull().sum()
+
+        if missing_cnt > 0:
+            dataset[variable].replace({np.nan:'missing_gp'},inplace=True)
+            dataset_rm_miss = dataset[dataset[variable] != 'missing_gp'].copy()
+            dataset_miss = dataset[dataset[variable] == 'missing_gp'].copy()
+        else:
+            dataset_rm_miss = dataset.copy()
+            dataset_miss = None
+
+
+        X = dataset_rm_miss[variable]
+        Y = dataset_rm_miss[target_var]
+        Z = dataset_rm_miss[id_var]
+
+        X0p = X.min()
+        X01p = X.quantile(0.01)
+        X10p = X.quantile(0.10)
+        X20p = X.quantile(0.20)
+        X30p = X.quantile(0.30)
+        X40p = X.quantile(0.40)
+        X50p = X.quantile(0.50)
+        X60p = X.quantile(0.60)
+        X70p = X.quantile(0.70)
+        X80p = X.quantile(0.80)
+        X90p = X.quantile(0.90)
+        X95p = X.quantile(0.95)
+        X99p = X.quantile(0.99)
+        X100p = X.max()
+
+        if X100p == X0p:
+            continue
+        else:
+            bins = [X0p,X01p, X10p, X20p, X30p, X40p, X50p, X60p, X70p, X80p, X90p,X95p,X99p, X100p]
+            bins = np.unique(bins)
+            bucket = pd.cut(X, bins, include_lowest=True).astype(str)
+            dataset_xyz = pd.DataFrame({"X": X, "Y": Y, "Bucket": bucket, "cnt": Z})
+
+            if missing_cnt > 0:
+                X = dataset_miss[variable]
+                Y = dataset_miss[target_var]
+                Z = dataset_miss[id_var]
+                dataset_xyz_miss = pd.DataFrame({"X": X, "Y": Y, "Bucket": X, "cnt":Z})
+                dataset_xyz = pd.concat([dataset_xyz,dataset_xyz_miss],axis=0)
+
+            crosstab = dataset_xyz.groupby('Bucket').agg({ 'Y' : 'sum' ,
+                                                           'cnt' : 'count' })
+
+            Y_sum = crosstab.Y.sum()
+            obs_sum = crosstab.cnt.sum()
+            crosstab['rate'] = crosstab['Y'] / crosstab['cnt']
+            crosstab['var'] = variable
+            crosstab['tgt%'] = crosstab['Y'] / Y_sum
+            crosstab['no-tgt%'] = (crosstab['cnt'] - crosstab['Y']) / (obs_sum - Y_sum)
+            crosstab['cnt_pct'] = crosstab['cnt']/obs_sum
+
+            def checkformat(df):
+                if df['tgt%'] == 0 or df['no-tgt%'] == 0:
+                    return 0
+                else:
+                    return np.log(df['tgt%'] / df['no-tgt%'])
+    
+    
+            crosstab['WOE'] = crosstab.apply(checkformat, axis=1)
+            crosstab['IV_row'] = (crosstab['tgt%'] - crosstab['no-tgt%']) * crosstab['WOE']
+            crosstab['IV_sum'] = crosstab['IV_row'].sum()
+    
+            crosstab.index.name = 'value'
+            crosstab.reset_index(inplace=True)
+            crosstab['max'] = crosstab['value'].map(lambda x: (x.replace(']', '')).split(',')[-1])
+            crosstab_all_num = pd.concat([crosstab, crosstab_all_num], axis=0)
+
+    return crosstab_all_num
+
+
+
+# ---------------------------------------------------------------------------
+#  calculate IV for categorical variables
+
+def iv_for_char(dataset,char_list,target_var,id_var):
+    crosstab_all_char = pd.DataFrame()
+
+    for variable in char_list:
+        print (variable)
+        if variable is None:
+            continue
+        # treat missing value as one group
+
+        dataset[variable].replace({np.nan:'missing_gp'},inplace=True)
+
+        df = pd.DataFrame(dataset[variable].value_counts())
+        df = df.reset_index()
+
+        if len(df) > 500:
+            print(variable +" length >= 500 ,do nothing")#continue
+        else:
+            crosstab = dataset.groupby(variable).agg({target_var: 'sum',
+                                                      id_var: 'count'})
+
+            crosstab['var'] = crosstab.index.name
+            crosstab.index.name = 'value'
+            crosstab.reset_index(inplace = True)
+            crosstab.rename(columns={target_var: 'Y',
+                                     id_var    : 'cnt'},
+                               inplace=True)
+
+            #crosstab['rate'] = crosstab['Y'] / crosstab['cnt']
+            Y_sum = crosstab.Y.sum()
+            obs_sum = crosstab.cnt.sum()
+            crosstab['rate'] = crosstab['Y'] / crosstab['cnt']
+            crosstab['tgt%'] = crosstab['Y'] / Y_sum
+            crosstab['no-tgt%'] = (crosstab['cnt'] - crosstab['Y']) / (obs_sum - Y_sum)
+            crosstab['cnt_pct'] = crosstab['cnt'] / obs_sum
+
+            def checkformat(df):
+                if df['tgt%'] == 0 or df['no-tgt%'] == 0:
+                    return 0
+                else:
+                    return np.log(df['tgt%'] / df['no-tgt%'])
+            
+            
+            crosstab['WOE'] = crosstab.apply(checkformat, axis=1)
+            crosstab['IV_row'] = (crosstab['tgt%'] - crosstab['no-tgt%']) * crosstab['WOE']
+            crosstab['IV_sum'] = crosstab['IV_row'].sum()
+            crosstab['max'] = crosstab['value'].map(lambda x: x if type(x)!=str else (x.replace(']', '')).split(',')[-1])
+
+            crosstab_all_char = pd.concat([crosstab_all_char, crosstab], axis=0)    
+    return crosstab_all_char
+def calc_jiaying_IV():
+    input_path = r'D:\lijiachen\code\SAS\juxinliJiakaModel\data\\'
+    output_path = u'data\jiayingJuxinliModel\output\IVCalcWithCut\\'
+    input_file = r't_052630_jxl_58_var1.sas7bdat'
+    output_file = r'IVCalcWithCut_58.csv'
+    jiaying_all = pd.read_sas(input_path + input_file,
+                              encoding='latin-1'
+                              # na_values =-99
+                              )
+    # 取首贷，20170615之前
+    jiaying_first_0615 = jiaying_all[(jiaying_all['NFLG'] == 1) & (jiaying_all['AD_MON'] <= '20170615')]
+    target_var = 'EM6_OVD30'
+    id_var = 'CID'
+    var_list = list(jiaying_all.columns[:])
+    remove_list = ['MID', 'CID', 'LID', 'ADD_TIME', 'PH_REG_DATE']
+    for var in remove_list:
+        if var in var_list:
+            var_list.remove(var)
+    IVCalcWithCut(jiaying_first_0615, id_var, target_var, var_list, output_path, output_file)
+def calc_jiaka_IV():
+    input_path = r'D:\lijiachen\code\SAS\juxinliJiakaModel\data\\'
+    output_path = u'data\jiakaJuxinliModel\output\IVCalcWithCut\\'
+    input_file = r't_052630_jxl_35_var1.sas7bdat'
+    output_file = r'IVCalcWithCut_35.csv'
+    jiaka_all = pd.read_sas(input_path + input_file,
+                              encoding='latin-1'
+                              # na_values =-99
+                              )
+    # 取首贷，20170731之前
+    jiayka_first_0731 = jiaka_all[(jiaka_all['NFLG'] == 1) & (jiaka_all['AD_MON'] <= '20170731')]
+    target_var = 'EM5_OVD30'
+    id_var = 'CID'
+    var_list = list(jiayka_first_0731.columns[:])
+    remove_list = ['MID', 'CID', 'LID', 'ADD_TIME', 'PH_REG_DATE']
+    for var in remove_list:
+        if var in var_list:
+            var_list.remove(var)
+    IVCalcWithCut(jiayka_first_0731, id_var, target_var, var_list, output_path, output_file)
+
+def calc_miaola_360_IV():
+    input_path = r'D:\lijiachen\code\SAS\juxinliJiakaModel\data\\'
+    output_path = u'data\miaolaRong360\output\IVCalcWithCut\\'
+    input_file = r'dnj_59_0124_v2_sas.sas7bdat'
+    output_file = r'IVCalcWithCut_rong360.csv'
+    jiaka_all = pd.read_sas(input_path + input_file,
+                            encoding='latin-1'
+                            # na_values =-99
+                            )
+    target_var = 'OVD'
+    id_var = 'CID'
+    var_list = list(jiaka_all.columns[:])
+    remove_list = ['MID', 'CID', 'LID', 'ADD_TIME', 'PH_REG_DATE','AUDIT_TIME','SHOULD_TIME','FACT_TIME','STAT_DATE']
+    for var in remove_list:
+         if var in var_list:
+             var_list.remove(var)
+    IVCalcWithCut(jiaka_all, id_var, target_var, var_list, output_path, output_file)
+def calc_jiaying_left_IV():
+    input_path = r'D:\lijiachen\code\SAS\juxinliJiakaModel\data\\'
+    output_path = u'data\jiayingJuxinliModel\output\IVCalcWithCut\\'
+    input_file = r'l_58_2_WIDE_left.sas7bdat'
+    output_file = r'IVCalcWithCut_58_left.csv'
+    jiaka_all = pd.read_sas(input_path + input_file,
+                            encoding='latin-1'
+                            # na_values =-99
+                            )
+    target_var = 'Y'
+    id_var = 'CID'
+    var_list = list(jiaka_all.columns[:])
+    remove_list = ['MID', 'CID', 'LID', 'ADD_TIME', 'PH_REG_DATE','AUDIT_TIME','SHOULD_TIME','FACT_TIME','STAT_DATE']
+    for var in remove_list:
+         if var in var_list:
+             var_list.remove(var)
+    IVCalcWithCut(jiaka_all, id_var, target_var, var_list, output_path, output_file)
+
+if __name__ == '__main__':
+    # calc_jiaying_IV()
+    # calc_jiaka_IV()
+    calc_jiaying_left_IV()
+    
+    
+####################EvaluateModel######################
+# -*- coding: utf-8 -*-
+import pandas as pd
+import numpy as np
+from sklearn.cross_validation import train_test_split
+from sklearn.metrics import roc_auc_score, roc_curve, auc
+from sklearn import metrics
+import matplotlib.pyplot  as plt
+from scipy.stats import ks_2samp
+import datetime
+
+CUT_BIN = 10
+#使好样本和坏样本比例均衡
+def test_train_split_by_Ratio(X,Y,ratio):
+    good_sample_X = X[Y==0]
+    good_sample_Y = Y[Y==0]
+    bad_sample_X = X[Y==1]
+    bad_sample_Y = Y[Y==1]
+    bad_X_train, bad_X_test, bad_y_train, bad_y_test = train_test_split(bad_sample_X, bad_sample_Y, test_size=0.3, random_state=42)
+    good_X_train, good_X_test, good_y_train, good_y_test = train_test_split(good_sample_X, good_sample_Y, train_size=len(bad_X_train)*ratio, random_state=42)
+    X_train = pd.concat([bad_X_train,good_X_train],axis=0)
+    X_test = pd.concat([bad_X_test,good_X_test],axis=0)
+    y_train = pd.concat([bad_y_train,good_y_train],axis=0)
+    y_test = pd.concat([bad_y_test,good_y_test],axis=0)
+    print ("check num, the train num of x is %d ,y is %d, test num of x is %d,y is %d" %(len(X_train),len(y_train),len(X_test),len(y_test)))
+    return [X_train, X_test, y_train, y_test]
+def save_feature_importance(clf,output_path,model_name,output_feature_file):
+    #输出参数Importance排序    
+    try:
+        feature_importances = clf.feature_importances_
+        model_ranks = Series(feature_importances,index=X_test.columns, name='Importance')
+        model_ranks = pd.DataFrameame(model_ranks)
+        model_ranks = model_ranks.sort_values(by='Importance',ascending= False)
+        model_ranks.to_csv(output_path + model_name+output_feature_file)
+    except:
+        print (model_name +' doesnt have feature_importances')
+        
+def evaluateModel(y_pred,y_prob,y_test,ks_file,roc_file,model_name,output_path):  
+    #输出KS表格，曲线
+    calcKSOutput(y_prob, y_test, model_name+ks_file,output_path)
+    
+    #输出ROC表格，曲线
+    calcRocOutput(y_test, y_prob,model_name+roc_file,output_path)
+    
+    #输出模型结果
+    measure_performance(y_test, y_pred) 
+    print (model_name +'end at '+datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    
+
+
+#将预测概率和真实值，计算KS，输出KS文件，KS图形
+def calcKSOutput(y_prob,y_test,ks_file,output_path):
+    data = pd.DataFrame({'score':y_prob,'bad':y_test})
+    data['bucket'] = pd.qcut(data.score, CUT_BIN, retbins=False) #大小相同的桶(bucket or 分位数quantile)
+
+    for_ks = data.groupby('bucket').agg({'bad': np.sum,
+                                         'score': 'count'
+                                         })
+    for_ks = for_ks.rename(columns={'bad':'Target','score':'Count'})
+    for_ks.reset_index(inplace=True)
+    for_ks.sort_values(by='bucket', ascending=False, inplace=True)    
+    for_ks['No_target'] = for_ks['Count']-for_ks['Target']
+    for_ks['Bad_rate'] = for_ks['Target']/for_ks['Count']
+    for_ks['Cum_tgt'] = for_ks['Target'].cumsum()/sum(for_ks['Target'])
+    for_ks['Cum_notgt'] = for_ks['No_target'].cumsum()/sum(for_ks['No_target'])
+    for_ks['tgt_Dist'] = for_ks['Target']/sum(for_ks['Target'])
+    for_ks['lift'] = for_ks['Bad_rate']/(sum(for_ks['Target'])*1.0/sum(for_ks['Count']))
+    for_ks['KS'] = for_ks['Cum_tgt']-for_ks['Cum_notgt'] 
+    for_ks['Decile'] = range(1,len(for_ks)+1)
+    for_ks.loc[len(for_ks)]=['',sum(for_ks['Target']),sum(for_ks['Count']),sum(for_ks['No_target']),'','','','','',max(for_ks['KS']),'overall']
+    for_ks[['Decile', 'bucket','Count','Target','No_target','Bad_rate','Cum_tgt','Cum_notgt','tgt_Dist','lift','KS']].to_csv(output_path + ks_file+'.csv',encoding='latin-1',index=None)    
+    
+    #输出KS文件
+    Cum_tgt = list(for_ks['Cum_tgt'])[:-1]
+    Cum_notgt = list(for_ks['Cum_notgt'])[:-1]
+    KS_value = ks_2samp(y_prob[y_test==1], y_prob[y_test!=1]).statistic   # max(for_ks['KS']) max(TPR-FPR)
+    outputKSFigue(Cum_tgt, Cum_notgt,ks_file,KS_value,output_path)
+    print ('KS value %0.3f' %(KS_value))
+def outputKSFigue(Cum_tgt,Cum_notgt,ks_file,KS_value,output_path):
+    plt.clf()
+    bucket = [x*1.0/len(Cum_tgt) for x in range(0,len(Cum_tgt)+1)]
+    plt.plot(bucket, [0]+Cum_tgt, 'x-',color = 'b',label='Cum_tgt')
+    plt.plot(bucket, [0]+Cum_notgt,'+-',color = 'g',label='Cum_notgt') 
+    #plt.plot([0, 1], [0, 1], 'k--')
+    plt.xlim([0.0, 1.0])
+    plt.xticks(bucket)
+    plt.ylim([0.0, 1.0])
+    plt.yticks(bucket)
+    #plt.xlabel('Bucket')
+    #plt.ylabel('Cum_tgt ,Cum_notgt')
+    plt.title(ks_file+' curve (KS_value = %0.3f)' % KS_value)
+    plt.grid(True)  
+    plt.legend(loc='lower right')
+    fig = plt.gcf()
+    fig.set_size_inches(10.5, 10.5)
+    fig.savefig(output_path+ks_file, dpi=100)    
+    plt.close()
+def calcRocOutput(y_test, y_prob,roc_file,output_path):
+    FPR, TPR, thresholds = roc_curve(y_test, y_prob)  
+    roc_auc = auc(FPR, TPR)
+    print ('AUC is %0.3f' %(roc_auc))
+    plt.clf()
+    bucket = [x*1.0/CUT_BIN for x in range(0,CUT_BIN+1)]
+    plt.plot(FPR, TPR, label='ROC curve (area = %0.3f)' % roc_auc)
+    plt.plot([0, 1], [0, 1], 'k--')
+    plt.xlim([0.0, 1.0])
+    plt.xticks(bucket)
+    plt.ylim([0.0, 1.0])
+    plt.yticks(bucket)
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(roc_file+' curve ')
+    plt.grid(True)  
+    plt.legend(loc='lower right')
+    fig = plt.gcf()
+    fig.set_size_inches(10.5, 10.5)
+    fig.savefig(output_path+roc_file, dpi=100)    
+    plt.close()
+def measure_performance(y_test, y_pred, show_accuracy=True, show_classification_report=True,
+                        show_confussion_matrix=True):
+    if show_accuracy:
+        print('Accuracy:{0:.3f}'.format(metrics.accuracy_score(y_test, y_pred)))
+        # print('=' * 60)
+
+    if show_classification_report:
+        print('Classification report')
+        print(metrics.classification_report(y_test, y_pred))
+        print('=' * 60)
+
+    if show_confussion_matrix:
+        print('Confussion matrix')
+        print(metrics.confusion_matrix(y_test, y_pred,labels=[1,0])) #以坏人为1，好人为0
+#if __name__ == '__main__':
+
+
+
+##########################Inforvalue_v2##############################
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 11 20:43:04 2018
+
+@author: zhangli3
+"""
+import pandas as pd
+import numpy as np
+import math
+from scipy import stats
+from sklearn.utils.multiclass import type_of_target
+
+input_path = 'E:\\2 Product\\0 model\\in\\'  # inout file path
+output_path = 'E:\\2 Product\\0 model\\out\\'  # putput file path
+
+
+file = input_path + "beescore20180515.csv"
+rawdata = pd.read_csv(file,sep=',',encoding='latin-1',
+                     # usecols=[],
+                     # index=None,
+                     dtype={'CID': np.str})
+
+Y=['m1_ovd3']
+X=['source_channel','bee_score','sex','degree','age']
+XY=X+Y
+dataset=rawdata[XY]
+
+final_table = WOE_Binning(Y,dataset,sign = False,n_threshold=100,Y_threshold=30,p_threshold=0.05)
+
+def WOE_Binning(Y,dataset,sign = False,n_threshold=100,Y_threshold=30,p_threshold=0.05):    
+    column = list(set(dataset.columns[0])-set(Y))   
+    summary = dataset.groupby([column]).agg({Y:["mean","size","std"]})    
+    summary.columns = summary.columns.droplevel(level=0)
+    sumary.columns=["means","nsamples","std_dev"]    
+    summary = summary[["means","nsamples","std_dev"]]
+    summary = summary.reset_index()    
+    summary["del_flag"] = 0
+    summary["std_dev"] = summary["std_dev"].fillna(0)    
+    summary = summary.sort_values([column],ascending = sign)    
+    while True:
+        i = 0        
+        summary = summary[summary.del_flag != 1]
+        summary = summary.reset_index(drop=True)
+        while True:            
+            j = i+1            
+            if j >= len(summary):
+                break           
+            if summary.iloc[j].means < summary.iloc[i].means:
+                i = i+1
+                continue
+            else:              
+                while True:        
+                    n = summary.iloc[j].nsamples + summary.iloc[i].nsamples
+                    m = (summary.iloc[j].nsamples*summary.iloc[j].means +
+                           summary.iloc[i].nsamples*summary.iloc[i].means)/n                         
+                    if n == 2:
+                        s = np.std([summary.iloc[j].means,summary.iloc[i].means])
+                    else:
+                        s = np.sqrt((summary.iloc[j].nsamples*((summary.iloc[j].std_dev)**2)+
+                                    summary.iloc[i].nsamples*((summary.iloc[i].std_dev)**2))/n)                    
+                    summary.loc[i,"nsamples"] = n
+                    summary.loc[i,"means"] = m
+                    summary.loc[i,"std_dev"] = s
+                    summary.loc[j,"del_flag"] = 1                    
+                    j = j + 1
+                    if j >= len(summary):
+                       break
+                    if summary.loc[j,"means"] < summary.loc[i,"means"]:
+                       i = j
+                       break
+            if j >= len(summary):
+                break
+        dels = np.sum(summary["del_flag"])
+        if dels == 0:
+            break        
+    while True:
+        summary["means_lead"] = summary["means"].shift(-1)
+        summary["nsamples_lead"] = summary["nsamples"].shift(-1)
+        summary["std_dev_lead"] = summary["std_dev"].shift(-1)        
+        summary["est_nsamples"] =  summary["nsamples_lead"] +summary["nsamples"] 
+        summary["est_means"] = (summary["means_lead"]*summary["nsamples_lead"] + 
+                                summary["means"]*summary["nsamples"])/summary["est_nsamples"]
+        
+        summary["est_std_dev2"] = (summary["nsamples_lead"]*summary["std_dev_lead"]**2 + 
+                                  summary["nsamples"]*summary["std_dev"]**2)/(summary["est_nsamples"]-2)         
+        summary["z_value"] =  (summary["means"] - summary["means_lead"])/np.sqrt(summary["est_std_dev2"]*(1/summary["nsamples"] + 1/summary["nsamples_lead"]))        
+        summary["p_value"] = 1 - stats.norm.cdf(summary["z_value"])        
+        condition = (summary["nsamples"]<n_threshold)|(summary["nsamples_lead"]<n_threshold)|(summary["means"]*summary["nsamples"]<defaults_threshold)|(summary["means_lead"]*summary["nsamples_lead"]<defaults_threshold)                
+        summary[condition].p_value = summary[condition].p_value + 1        
+        summary["p_value"] = summary.apply(lambda row: row["p_value"] + 1 if (row["nsamples"]<n_threshold)|(row["nsamples_lead"]<n_threshold)|(row["means"]*row["nsamples"]<defaults_threshold)|(row["means_lead"]*row["nsamples_lead"]<defaults_threshold)
+                 else row["p_value"], axis = 1 )      
+        max_p = max(summary["p_value"])   
+        row_of_maxp = summary['p_value'].idxmax()
+        row_delete = row_of_maxp + 1        
+        if max_p>p_threshold:
+            summary = summary.drop(summary.index[row_delete])
+            summary = summary.reset_index(drop=True)
+        else:
+            break        
+        summary["means"] = summary.apply(lambda row: row["est_means"] if row["p_value"] == max_p else row["means"], axis = 1 )
+        summary["nsamples"] = summary.apply(lambda row: row["est_nsamples"] if row["p_value"] == max_p else row["nsamples"], axis = 1 )
+        summary["std_dev"] = summary.apply(lambda row: np.sqrt(row["est_std_dev2"]) if row["p_value"] == max_p else row["std_dev"], axis = 1 )
+        
+    WOE_summary = summary[[column,"nsamples","means"]]    
+    WOE_summary["bads"] = WOE_summary["means"]*WOE_summary["nsamples"]
+    WOE_summary["goods"] = WOE_summary["nsamples"] - WOE_summary["bads"]    
+    TotalGoods = np.sum(WOE_summary["goods"])
+    TotalBads = np.sum(WOE_summary["bads"])    
+    WOE_summary["dist_good"] = WOE_summary["goods"]/TotalGoods
+    WOE_summary["dist_bad"]  = WOE_summary["bads"]/TotalBads    
+    WOE_summary["WOE_"+column] = np.log(WOE_summary["dist_good"] / WOE_summary["dist_bad"])     
+    WOE_summary["IV_components"] = (WOE_summary["dist_good"] - WOE_summary["dist_bad"])*WOE_summary["WOE_"+column]     
+    print(WOE_summary)
+    Total_IV = np.sum(WOE_summary["IV_components"])
+    print(Total_IV)    
+    def dummy(row):
+        return "-".join(map(str,np.sort([row[column],row[column+"_shift"]])))    
+    WOE_summary = WOE_summary.sort_values(by=[column]).reset_index(drop=True)    
+    if sign == False:
+        shift_var = 1
+        bucket = True
+    else:
+        shift_var = -1
+        bucket = False        
+    WOE_summary[column+"_shift"] = WOE_summary[column].shift(shift_var)    
+    if sign == False:
+        WOE_summary.loc[0,column+"_shift"] = -np.inf
+        bins = np.sort(list(WOE_summary[column]) + [-np.Inf])
+    else:
+        WOE_summary.loc[len(WOE_summary)-1,column+"_shift"] = np.inf
+        bins = np.sort(list(WOE_summary[column]) + [np.Inf])
+        
+    WOE_summary["labels"] = WOE_summary.apply(dummy,axis=1)    
+    dataset["bins"] =  pd.cut(dataset[column],bins,labels= WOE_summary["labels"],right=bucket,precision = 0)    
+    dataset["bins"] = dataset["bins"].astype(str)
+    dataset['bins'] = dataset['bins'].map(lambda x: x.lstrip('[').rstrip(')'))    
+    final_table = dataset.set_index("bins").join(WOE_summary[["WOE_"+column,"labels"]].set_index("labels"))  
+    final_table = final_table.reset_index().rename(index=str, columns={"index": column+"_buckets"}) 
+    return final_table 
+    
+
+
+
+
+
+
+
+
